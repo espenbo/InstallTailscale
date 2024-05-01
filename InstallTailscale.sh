@@ -50,6 +50,11 @@ function prettyBox () {
   echo -e "[ ${color}${1}${clear}  ] ${2}"
 }
 
+# Funksjon for å sjekke om systemet bruker systemd
+uses_systemd() {
+  [[ $(ps --no-headers -o comm 1) == "systemd" ]]
+}
+
 function extractFilenameFromURL() {
     local url=$1
     local filename=$(basename "$url")
@@ -147,29 +152,61 @@ function logicForinitd() {
 case "$1" in
 start)
     echo "Starting Tailscale..."
-    /usr/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state
+    /usr/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state &
+    echo $! > /var/run/tailscaled.pid
     ;;
 stop)
     echo "Stopping Tailscale..."
-    /usr/bin/tailscale down
+    if [ -f /var/run/tailscaled.pid ]; then
+        kill `cat /var/run/tailscaled.pid`
+        rm -f /var/run/tailscaled.pid
+    else
+        echo "Tailscale PID file not found, check if Tailscale is running."
+    fi
+    ;;
+status)
+    if [ -f /var/run/tailscaled.pid ]; then
+        if ps -p `cat /var/run/tailscaled.pid` > /dev/null
+        then
+            echo "Tailscale is running."
+        else
+            echo "Tailscale PID exists but process does not. Cleaning up."
+            rm -f /var/run/tailscaled.pid
+            echo "Tailscale is not running."
+        fi
+    else
+        echo "Tailscale is not running."
+    fi
     ;;
 *)
-    echo "Usage: $0 {start|stop}"
+    echo "Usage: $0 {start|stop|status}"
     exit 1
     ;;
 esac
+
 EOF
 
     # Set execution rights for the script
     prettyBox CURRENT "Set chown root:root and +x to the ${init_script} file."
-    chown root:root "$init_script}"
+    chown root:root "$init_script"
     chmod +x "$init_script"
 
-    # Register the script to run at startup
-    prettyBox CURRENT "update-rc.d tailscale defaults"
-    update-rc.d tailscale defaults
+    prettyBox CURRENT "Link the startup script to init. ln -s /etc/init.d/tailscale /etc/rc.d/S99_tailscale"
+    ln -s /etc/init.d/tailscale /etc/rc.d/S99_tailscale
 
-    prettyBox COMPLETE "Tailscale init script created and enabled."
+    # Check if update-rc.d is available and use it if it is
+    if command -v update-rc.d >/dev/null; then
+        update-rc.d tailscale defaults
+        prettyBox COMPLETE "Tailscale init script created and enabled with update-rc.d."
+    else
+        prettyBox CURRENT "update-rc.d is not available. Manual setup may be required."
+    fi
+
+    prettyBox CURRENT "Start tailscale service? (y/N)"
+      read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+          /etc/init.d/tailscale start | tee -a $LOGFILE
+        fi
 }
 
 
@@ -239,11 +276,12 @@ function Install_binaries_for_armv6() {
     prettyBox CURRENT "System uses systemd. Downloading with curl..."
     curl -o "$LINK" "$FULL_URL"
   else
-    prettyBox CURRENT "The system does not use systemd. Creating init.d script..."
     prettyBox CURRENT "Downloading with curl..."
     curl -o "$LINK" "$FULL_URL"
-    # Add logic for init.d script here
+    prettyBox CURRENT "Extract and install nativ binarys"
     installNativeExtractBinarys "$APP_FILENAME"
+    prettyBox CURRENT "The system does not use systemd. Creating init.d script..."
+    logicForinitd
   fi
 }
   
@@ -255,45 +293,83 @@ function Install_binaries_for_arm64() {
   # Parsing the section that matches the OS type (updated to find the correct binary link)
   SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"static\".*?<ul>.*?<li>arm64: <a href=\"([^\"]+)\">.*?</ul>" | tr -d '\0' | sed -n 's/.*href="\([^"]*\).*/\1/p')
 
-  if [ -z "$SECTION" ]; then
-    prettyBox FAILED "No installation method found for arm64."
-    exit 1
+  if [ ! -z "$SECTION" ]; then
+    prettyBox CURRENT "Found direct link for ARM64 binaries: $SECTION"
+    FULL_URL="https://pkgs.tailscale.com/stable/$SECTION"
+  else
+    prettyBox FAILED "No direct installation method found for ARM64, trying fallback..."
+    # Fallback to use awk to extract the link for ARM64 binaries if the first method fails
+    LINK=$(echo "$DATA" | awk '/<li>.*tailscale_[^"]*_arm64.tgz/ { print }' | sed -n 's/.*href="\([^"]*_arm64\.tgz\).*/\1/p')
+
+    if [ -z "$LINK" ]; then
+      prettyBox FAILED "No installation method found for ARM64."
+      exit 1
+    fi
+
+    FULL_URL="${URL}${LINK}"
+    prettyBox CURRENT "Found link via fallback method: $FULL_URL"
   fi
 
+  # Download the file
+  prettyBox CURRENT "Downloading $FULL_URL"
+  APP_FILENAME=$(extractFilenameFromURL "$FULL_URL")
+
   if uses_systemd; then
-    prettyBox CURRENT "Downloading $SECTION"
-    wget "https://pkgs.tailscale.com/stable/$SECTION"
+    prettyBox CURRENT "System uses systemd. Downloading with curl..."
+    curl -o "$LINK" "$FULL_URL"
   else
+    prettyBox CURRENT "Downloading with curl..."
+    curl -o "$LINK" "$FULL_URL"
+    prettyBox CURRENT "Extract and install native binaries"
+    installNativeExtractBinarys "$APP_FILENAME"
     prettyBox CURRENT "The system does not use systemd. Creating init.d script..."
-    # Add logic for init.d script here
-    prettyBox CURRENT "Downloading $SECTION"
-    wget "https://pkgs.tailscale.com/stable/$SECTION"
+    logicForinitd
   fi
 }
 
+
 function Install_binaries_for_386() {
-  prettyBox CURRENT "Install_binaries_for_386"  
+  prettyBox CURRENT "Install_binaries_for_386"
   prettyBox CURRENT "Fetching installation methods from Tailscale..."
   DATA=$(curl --silent --insecure "$URL")
 
-  # Parsing the section that matches the OS type (updated to find the correct binary link)
-  SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"static\".*?<ul>.*?<li>arm64: <a href=\"([^\"]+)\">.*?</ul>" | tr -d '\0' | sed -n 's/.*href="\([^"]*\).*/\1/p')
+  # Try to find a direct link for x86 (386) binaries
+  SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"static\".*?<ul>.*?<li>x86: <a href=\"([^\"]+)\">.*?</ul>" | tr -d '\0' | sed -n 's/.*href="\([^"]*\).*/\1/p')
 
   if [ -z "$SECTION" ]; then
-    prettyBox FAILED "No installation method found for arm64."
-    exit 1
+    prettyBox FAILED "No direct installation method found for 386, trying fallback..."
+    # Fallback to extract the link for 386 binaries if the first method fails
+    LINK=$(echo "$DATA" | awk '/<li>.*tailscale_[^"]*_386.tgz/ { print }' | sed -n 's/.*href="\([^"]*_386\.tgz\).*/\1/p')
+
+    if [ -z "$LINK" ]; then
+      prettyBox FAILED "No installation method found for 386."
+      exit 1
+    fi
+
+    FULL_URL="${URL}${LINK}"
+    prettyBox CURRENT "Found link via fallback method: $FULL_URL"
+  else
+    FULL_URL="https://pkgs.tailscale.com/stable/$SECTION"
+    prettyBox CURRENT "Found direct link for 386 binaries: $SECTION"
   fi
 
+  # Download the file
+  prettyBox CURRENT "Downloading $FULL_URL"
+  APP_FILENAME=$(extractFilenameFromURL "$FULL_URL")
+
   if uses_systemd; then
-    prettyBox CURRENT "Downloading $SECTION"
-    wget "https://pkgs.tailscale.com/stable/$SECTION"
+    prettyBox CURRENT "System uses systemd. Downloading with curl..."
+    curl -o "$LINK" "$FULL_URL"
   else
+    prettyBox CURRENT "Downloading with curl..."
+    curl -o "$LINK" "$FULL_URL"
+    prettyBox CURRENT "Extract and install native binaries"
+    installNativeExtractBinarys "$APP_FILENAME"
     prettyBox CURRENT "The system does not use systemd. Creating init.d script..."
-    # Add logic for init.d script here
-    prettyBox CURRENT "Downloading $SECTION"
-    wget "https://pkgs.tailscale.com/stable/$SECTION"
+    logicForinitd
   fi
 }
+
 
   # Henter pakkeliste fra Tailscale for gjeldende distribusjon
 function Install_From_Tailscale_Script() {
@@ -327,7 +403,6 @@ function Install_From_Tailscale_Script() {
 
 prettyBox CURRENT "Checking if Tailscale is installed..."
 checkInstallStatus  # Do not pipe this to tee if it affects the exit behavior
-prettyBox CURRENT "This should not be seen if Tailscale is installed already and detected."
 
 prettyBox CURRENT "Run showInstallSummary"
 showInstallSummary 2>&1 | tee -a $LOGFILE
@@ -351,3 +426,8 @@ case "$OS_type" in
     ;;
 esac
 
+prettyBox CURRENT "Login and connect to tailscale? (y/N)"
+  read -r response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+      tailscale up | tee -a $LOGFILE
+    fi
