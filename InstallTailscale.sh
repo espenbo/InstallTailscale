@@ -19,11 +19,22 @@ clear='\e[0m'
 yellow='\e[33m'
 
 function checkInstallStatus () {
-  if command -v tailscale >/dev/null; then
+  if command -v ${APP_MAIN_NAME} >/dev/null; then
     ALREADY_INSTALLED=true
     prettyBox COMPLETE "Tailscale is already installed" | tee -a $LOGFILE
-    prettyBox CURRENT "Exiting with status 2"
-    exit 2
+    # Ask to remove the installed version of tailscale
+    echo "Do you want to remove the installed tailscale version? (y/N)"
+    read -r response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+      rm -f "/usr/sbin/${APP_MAIN_NAME}" | tee -a $LOGFILE
+      rm -f "/usr/bin/${APP_MAIN_NAME_DEMON}" | tee -a $LOGFILE
+      ALREADY_INSTALLED=false
+      prettyBox COMPLETE "${APP_FILENAME} file removed." | tee -a $LOGFILE
+    else
+      prettyBox CURRENT "${APP_FILENAME} file is not removed."
+      prettyBox CURRENT "Exiting with status 2"
+      exit 2
+    fi
   else
     echo -e "${green}Tailscale is not installed${clear}" | tee -a $LOGFILE
   fi
@@ -45,82 +56,122 @@ function extractFilenameFromURL() {
     echo "$filename"
 }
 
-function installNativePlaceBinarys () {
-            # Copy File /usr/sbin/tailscaled /usr/bin/tailscale
-        prettyBoxCurrent "Copying ${APP_MAIN_NAME} to /usr/sbin/${APP_MAIN_NAME}.new"
-        prettyBoxCurrent "Copying ${APP_MAIN_NAME_DEMON} to /usr/bin/${APP_MAIN_NAME_DEMON}.new"
-        
-        if cp "${APP_MAIN_NAME}" "/usr/sbin/${APP_MAIN_NAME}.new"; then
-          prettyBoxComplete "Binary copied succesfully"
-        else
-          prettyBoxFailed "Failed to copy Binary" 1
-        fi
-        if cp "${APP_MAIN_NAME_DEMON}" "/usr/bin/${APP_MAIN_NAME_DEMON}.new"; then
-          prettyBoxComplete "Binary copied succesfully"
-        else
-          prettyBoxFailed "Failed to copy Binary" 1
-        fi
+function installNativePlaceBinarys() {
+    # Assume this function is called from the correct directory containing the binary files
+    # Move and set permissions for 'tailscale'
+    if mv "tailscale" "/usr/sbin/${APP_MAIN_NAME}.new"; then
+      prettyBox COMPLETE "Binary moved successfully to /usr/sbin/${APP_MAIN_NAME}.new"
+      chmod 755 "/usr/sbin/${APP_MAIN_NAME}.new"
+      chown root:root "/usr/sbin/${APP_MAIN_NAME}.new"
+      mv "/usr/sbin/${APP_MAIN_NAME}.new" "/usr/sbin/${APP_MAIN_NAME}"
+      prettyBox COMPLETE "Binary moved and set up at /usr/sbin/${APP_MAIN_NAME}"
+    else
+      prettyBox FAILED "Failed to move Binary to /usr/sbin/${APP_MAIN_NAME}.new" 1
+    fi
 
-
-        # Set Binary Mode
-        prettyBoxCurrent "Setting /usr/sbin/${APP_MAIN_NAME}.new to 0755"
-        prettyBoxCurrent "Setting /usr/bin/${APP_MAIN_NAME_DEMON}.new to 0755"
-        
-        if chmod 775 "/usr/sbin/${APP_MAIN_NAME}.new"; then
-          prettyBoxComplete "Binary modes set succesfully"
-        else
-          prettyBoxFailed "Failed to set Binary file modes" 1
-        fi
-        if chmod 775 "/usr/bin/${APP_MAIN_NAME_DEMON}.new"; then
-          prettyBoxComplete "Binary modes set succesfully"
-        else
-          prettyBoxFailed "Failed to set Binary file modes" 1
-        fi
-        
-        # Set owner and group
-        prettyBoxCurrent "Setting /usr/sbin/${APP_MAIN_NAME}.new owner and group to root"
-        prettyBoxCurrent "Setting /usr/bin/${APP_MAIN_NAME_DEMON}.new owner and group to root"
-        if chown root:root "/usr/sbin/${APP_MAIN_NAME}.new"; then
-          prettyBoxComplete "Binary owner and group set succesfully ${APP_MAIN_NAME}"
-        else
-          prettyBoxFailed "Failed to set Binary File owner and group ${APP_MAIN_NAME}" 1
-        fi
-        if chown root:root "/usr/bin/${APP_MAIN_NAME_DEMON}.new"; then
-          prettyBoxComplete "Binary owner and group set succesfully ${APP_MAIN_NAME_DEMON}"
-        else
-          prettyBoxFailed "Failed to set Binary File owner and group ${APP_MAIN_NAME_DEMON}" 1
-        fi
-
-
-        # Overwrite /usr/bin/netbird
-        prettyBoxCurrent "Overwriting /usr/sbin/${APP_MAIN_NAME} with /usr/sbin/${APP_MAIN_NAME}.new"
-        if mv "/usr/sbin/${APP_MAIN_NAME}.new" "/usr/sbin/${APP_MAIN_NAME}"; then
-          prettyBoxComplete "Binary Overwritten succesfully ${APP_MAIN_NAME}"
-        else
-          prettyBoxFailed "Failed to overwrite /usr/bin/${APP_MAIN_NAME}" 1
-        fi
-        prettyBoxCurrent "Overwriting /usr/bin/${APP_MAIN_NAME_DEMON} with /usr/bin/${APP_MAIN_NAME_DEMON}.new"
-        if mv "/usr/bin/${APP_MAIN_NAME_DEMON}.new" "/usr/bin/${APP_MAIN_NAME_DEMON}"; then
-          prettyBoxComplete "Binary Overwritten succesfully"
-        else
-          prettyBoxFailed "Failed to overwrite /usr/bin/${APP_MAIN_NAME_DEMON}" 1
-        fi
-}        
+    # Move and set permissions for 'tailscaled'
+    if mv "tailscaled" "/usr/bin/${APP_MAIN_NAME_DEMON}.new"; then
+      prettyBox COMPLETE "Binary moved successfully to /usr/bin/${APP_MAIN_NAME_DEMON}.new"
+      chmod 755 "/usr/bin/${APP_MAIN_NAME_DEMON}.new"
+      chown root:root "/usr/bin/${APP_MAIN_NAME_DEMON}.new"
+      mv "/usr/bin/${APP_MAIN_NAME_DEMON}.new" "/usr/bin/${APP_MAIN_NAME_DEMON}"
+      prettyBox COMPLETE "Binary moved and set up at /usr/bin/${APP_MAIN_NAME_DEMON}"
+    else
+      prettyBox FAILED "Failed to move Binary to /usr/bin/${APP_MAIN_NAME_DEMON}.new" 1
+    fi
+}
 
 function installNativeExtractBinarys() {
   local APP_FILENAME=$1
   prettyBox CURRENT "Extracting ${APP_FILENAME}"
-  if tar xf "${APP_FILENAME}"; then
-    prettyBox COMPLETE "Extracted ${APP_FILENAME}"
+
+  # Remove any old versions of the unpacked folder to avoid conflicts
+  local extracted_dir=$(basename "${APP_FILENAME}" .tgz)
+  rm -rf "./${extracted_dir}" | tee -a $LOGFILE
+
+  if tar -xzf "${APP_FILENAME}"; then
+    prettyBox CURRENT "Extracted ${APP_FILENAME}"
+    # Ask to remove the downloaded file
+    echo "Do you want to remove the downloaded file ${APP_FILENAME}? (y/N)"
+    read -r response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+      rm -f "${APP_FILENAME}" | tee -a $LOGFILE
+      prettyBox COMPLETE "${APP_FILENAME} file removed."
+    else
+      prettyBox COMPLETE "${APP_FILENAME} file is not removed."
+    fi
+
+    # Continue operations within the unpacked directory
+    cd "${extracted_dir}"
+    installNativePlaceBinarys  # Assume this function handles files within the current directory correctly
+    cd ..
   else
     prettyBox FAILED "Failed to extract ${APP_FILENAME}" 1
   fi
 }
 
-# Funksjon for å sjekke om systemet bruker systemd
-uses_systemd() {
-  [[ $(ps --no-headers -o comm 1) == "systemd" ]]
+function logicForinitd() {
+    # Define file path and file name
+    local init_script="/etc/init.d/tailscale"
+
+    # Check if the script already exists to avoid overwriting
+    if [[ -f "$init_script" ]]; then
+      prettyBox FAILED "$init_script already exists." | tee -a $LOGFILE
+
+      prettyBox CURRENT "Do you want to overwrite the $init_script file? (y/N)"
+      read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+          rm -f "${$init_script}" | tee -a $LOGFILE
+          prettyBox COMPLETE "${$init_script} file removed."
+        else
+          prettyBox COMPLETE "${$init_script} file is not removed."
+        return
+        fi
+    fi
+
+    # Create init-script with necessary content
+    prettyBox CURRENT "Creating ${init_script} init script."
+    cat > "$init_script" << 'EOF'
+#!/bin/sh
+# Tailscale init script
+
+### BEGIN INIT INFO
+# Provides:          tailscale
+# Required-Start:    $network $local_fs $remote_fs
+# Required-Stop:     $network $local_fs $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Tailscale VPN
+### END INIT INFO
+
+case "$1" in
+start)
+    echo "Starting Tailscale..."
+    /usr/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state
+    ;;
+stop)
+    echo "Stopping Tailscale..."
+    /usr/bin/tailscale down
+    ;;
+*)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+EOF
+
+    # Set execution rights for the script
+    prettyBox CURRENT "Set chown root:root and +x to the ${init_script} file."
+    chown root:root "$init_script}"
+    chmod +x "$init_script"
+
+    # Register the script to run at startup
+    prettyBox CURRENT "update-rc.d tailscale defaults"
+    update-rc.d tailscale defaults
+
+    prettyBox COMPLETE "Tailscale init script created and enabled."
 }
+
 
 
 # detect the platform
@@ -275,31 +326,28 @@ function Install_From_Tailscale_Script() {
 
 
 prettyBox CURRENT "Checking if Tailscale is installed..."
-    #checkInstallStatus 2>&1 | tee -a $LOGFILE
-    checkInstallStatus  # Do not pipe this to tee if it affects the exit behavior
+checkInstallStatus  # Do not pipe this to tee if it affects the exit behavior
 prettyBox CURRENT "This should not be seen if Tailscale is installed already and detected."
 
 prettyBox CURRENT "Run showInstallSummary"
 showInstallSummary 2>&1 | tee -a $LOGFILE
 
-# prettyBox CURRENT "Install_binaries"
-#    Install_binaries 2>&1 | tee -a $LOGFILE
-
 case "$OS_type" in
   armv7l|armv6)
-    Install_binaries_for_armv6
+    Install_binaries_for_armv6 2>&1 | tee -a $LOGFILE
     ;;
   arm64)
-    Install_binaries_for_arm64
+    Install_binaries_for_arm64 2>&1 | tee -a $LOGFILE
     ;;
   386)
-    Install_binaries_for_386
+    Install_binaries_for_386 2>&1 | tee -a $LOGFILE
     ;;
   amd64)
-    Install_From_Tailscale_Script
+    Install_From_Tailscale_Script 2>&1 | tee -a $LOGFILE
     ;;
   *)
     prettyBox FAILED "CPU architecture ${OS_type} not supported"
     exit 2
     ;;
 esac
+
