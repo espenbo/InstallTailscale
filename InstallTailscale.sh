@@ -251,6 +251,29 @@ function showInstallSummary () {
   echo -e "| Section = OS and version:      ${SECTION}${clear}"
   echo -e "| URL:                           ${URL}${clear}"
   echo -e "------------------------------------------------"
+
+  # Extract necessary information
+  local os_name=$(awk -F= '/^PRETTY_NAME=/{print $2}' /etc/os-release | tr -d '"')
+  local os_id=$(awk -F= '/^ID=/{print $2}' /etc/os-release | tr -d '"')
+  local version_id=$(awk -F= '/^VERSION_ID=/{print $2}' /etc/os-release | tr -d '"')
+  local version_codename=$(awk -F= '/^VERSION_CODENAME=/{print $2}' /etc/os-release | tr -d '"')
+
+  # Handle missing VERSION_CODENAME
+  if [[ -z "$version_codename" ]]; then
+    version_codename="N/A"  # Default value if VERSION_CODENAME is missing
+  fi
+
+  echo -e "------------------------------------------------"
+  echo -e "| Install Summary"
+  echo -e "------------------------------------------------"
+  echo -e "| Target Operating System:       ${green}${os_id}${clear}"
+  echo -e "| Distribution Name:             ${green}${os_name}${clear}"
+  echo -e "| Distribution Version ID:       ${green}${version_id}${clear}"
+  echo -e "| Distribution Version Codename: ${green}${version_codename}${clear}"
+  echo -e "| Target Arch:                   ${green}${OS_type}${clear}"
+  echo -e "| URL:                           ${URL}${clear}"
+  echo -e "------------------------------------------------"
+
 }
 
 
