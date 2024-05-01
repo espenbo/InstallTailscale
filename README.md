@@ -21,7 +21,7 @@ To run the script, navigate to the directory containing the script and run:
 
 bash
 
-./InstallTailscale3.sh
+./InstallTailscale.sh
 
 Script Functions
 checkInstallStatus
