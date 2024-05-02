@@ -8,6 +8,9 @@ LOGFILE="output.txt"
 OS1="platform"
 OS_type="Arch"
 OS="Distro"
+OS_NAME="__"
+OS_ID="__"
+VERSION_ID="__"
 VERSION_CODENAME="Distro version"
 SECTION="__"
 DATA=""
@@ -126,14 +129,14 @@ function logicForinitd() {
       prettyBox CURRENT "Do you want to overwrite the $init_script file? (y/N)"
       read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
-          rm -f "${$init_script}" | tee -a $LOGFILE
-          prettyBox COMPLETE "${$init_script} file removed."
+          rm -f "$init_script" | tee -a $LOGFILE
+          prettyBox COMPLETE "$init_script file removed."
         else
-          prettyBox COMPLETE "${$init_script} file is not removed."
-        return
+          prettyBox COMPLETE "$init_script file is not removed."
+          return
         fi
     fi
-
+    
     # Create init-script with necessary content
     prettyBox CURRENT "Creating ${init_script} init script."
     cat > "$init_script" << 'EOF'
@@ -210,31 +213,34 @@ EOF
 }
 
 
+function detectplatform () {
+  # detect the platform
+  OS1="$(uname | tr '[:upper:]' '[:lower:]')"
+  if ! [[ $OS1 == "linux" || $OS1 == "darwin" ]]; then
+    prettyBox FAILED "OS not supported"
+    exit 2 # Exits the script if Tailscale is found
+  fi
+}
 
-# detect the platform
-OS1="$(uname | tr '[:upper:]' '[:lower:]')"
-if ! [[ $OS1 == "linux" || $OS1 == "darwin" ]]; then
-  prettyBox FAILED "OS not supported"
-  exit 2 # Exits the script if Tailscale is found
-fi
-
-# Detect architecture
-OS_type="$(uname -m)"
-case "$OS_type" in
-  x86_64|amd64)
-    OS_type='amd64'
-    ;;
-  i?86|x86)
-    OS_type='386'
-    ;;
-  aarch64|arm64)
-    OS_type='arm64'
-    ;;
-  armv7l|armv6)
-    OS_type='armv6'
-    ;;
-  *) prettyBox FAILED "OS type ${OS_type} not supported" ;;
-esac
+function detectarchitecture () {
+  # Detect architecture
+  OS_type="$(uname -m)"
+  case "$OS_type" in
+    x86_64|amd64)
+      OS_type='amd64'
+      ;;
+    i?86|x86)
+      OS_type='386'
+      ;;
+    aarch64|arm64)
+      OS_type='arm64'
+      ;;
+    armv7l|armv6)
+      OS_type='armv6'
+      ;;
+    *) prettyBox FAILED "OS type ${OS_type} not supported" ;;
+  esac
+}
 
 # Get OS release and version
 OS=$(awk -F= '/^ID=/{print $2}' /etc/os-release | tr -d '"')
@@ -253,23 +259,23 @@ function showInstallSummary () {
   echo -e "------------------------------------------------"
 
   # Extract necessary information
-  local os_name=$(awk -F= '/^PRETTY_NAME=/{print $2}' /etc/os-release | tr -d '"')
-  local os_id=$(awk -F= '/^ID=/{print $2}' /etc/os-release | tr -d '"')
-  local version_id=$(awk -F= '/^VERSION_ID=/{print $2}' /etc/os-release | tr -d '"')
-  local version_codename=$(awk -F= '/^VERSION_CODENAME=/{print $2}' /etc/os-release | tr -d '"')
+  OS_NAME=$(awk -F= '/^PRETTY_NAME=/{print $2}' /etc/os-release | tr -d '"')
+  OS_ID=$(awk -F= '/^ID=/{print $2}' /etc/os-release | tr -d '"')
+  VERSION_ID=$(awk -F= '/^VERSION_ID=/{print $2}' /etc/os-release | tr -d '"')
+  VERSION_CODENAME=$(awk -F= '/^VERSION_CODENAME=/{print $2}' /etc/os-release | tr -d '"')
 
   # Handle missing VERSION_CODENAME
-  if [[ -z "$version_codename" ]]; then
-    version_codename="N/A"  # Default value if VERSION_CODENAME is missing
+  if [[ -z "$VERSION_CODENAME" ]]; then
+    VERSION_CODENAME="N/A"  # Default value if VERSION_CODENAME is missing
   fi
 
   echo -e "------------------------------------------------"
   echo -e "| Install Summary"
   echo -e "------------------------------------------------"
-  echo -e "| Target Operating System:       ${green}${os_id}${clear}"
-  echo -e "| Distribution Name:             ${green}${os_name}${clear}"
-  echo -e "| Distribution Version ID:       ${green}${version_id}${clear}"
-  echo -e "| Distribution Version Codename: ${green}${version_codename}${clear}"
+  echo -e "| Target Operating System:       ${green}${OS_ID}${clear}"
+  echo -e "| Distribution Name:             ${green}${OS_NAME}${clear}"
+  echo -e "| Distribution Version ID:       ${green}${VERSION_ID}${clear}"
+  echo -e "| Distribution Version Codename: ${green}${VERSION_CODENAME}${clear}"
   echo -e "| Target Arch:                   ${green}${OS_type}${clear}"
   echo -e "| URL:                           ${URL}${clear}"
   echo -e "------------------------------------------------"
@@ -394,38 +400,114 @@ function Install_binaries_for_386() {
 }
 
 
-  # Henter pakkeliste fra Tailscale for gjeldende distribusjon
-function Install_From_Tailscale_Script() {
-  prettyBox CURRENT "Henter installasjonsmetoder fra Tailscale..."
-  DATA=$(curl --silent --insecure "$URL")
+function fetchAndParseData() {
+    local url="$1"
+    local search_key="$2"
+    local search_codename="$3"
+    
+    prettyBox CURRENT "Fetch HTML data"
+    # Fetch HTML data
+    DATA=$(curl --silent --insecure "$url")
 
-  # Søker etter seksjonen som matcher operativsystemet og versjonen
-  SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"$OS-$VERSION_CODENAME\".*?$OS-$VERSION_CODENAME\">.*?</a>.*?</pre>" | tr -d '\0')
+    prettyBox CURRENT "Try to find the installation section using version ID first"
+    # Try to find the installation section using version ID first
+    SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"${search_key}\".*?</a>.*?</pre>" | tr -d '\0')
 
-
-# Install from script from the tailscale page
-  if [[ -z "$SECTION" ]]; then
-    echo "Ingen installasjonsmetode funnet for $OS $VERSION_CODENAME"
-    echo "Print ut første del av DATA for feilsøking:"
-    echo "${DATA:0:2000}"  # Øker antallet tegn for å få et bedre innblikk
-    exit 1
-  else
-    echo "Følgende kommandoer vil bli utført med sudo:"
-    echo "$SECTION" | grep 'sudo'
-    read -p "Ønsker du å fortsette med installasjonen? (y/N) " response
-    if [[ "$response" =~ ^[Yy]$ ]]; then
-      echo "Installerer Tailscale for $OS $VERSION_CODENAME..."
-      echo "$SECTION" | grep 'curl' | bash
-    else
-      echo "Installasjon avbrutt."
-      exit 1
+    # If not found, try using the version codename
+    if [[ -z "$SECTION" ]]; then
+        prettyBox CURRENT "If not found, try using the version codename"
+        SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"${search_codename}\".*?</a>.*?</pre>" | tr -d '\0')
     fi
-  fi
+
+    # Trying diffrent ways to find the right command
+
+
+    # Try to find the installation section using version ID first
+      prettyBox CURRENT "Try to find the installation section using awk and version ID first"
+    if [[ -z "$SECTION" ]]; then
+      SECTION=$(echo "$DATA" | awk -v pat="a name=\"$search_key\"" '$0 ~ pat, /<\/pre>/{print}')
+    fi
+    # If not found, try using the version codename
+    if [[ -z "$SECTION" ]]; then
+        prettyBox CURRENT "If not found, try using the awk and version codename"
+        SECTION=$(echo "$DATA" | awk -v pat="a name=\"$search_codename\"" '$0 ~ pat, /<\/pre>/{print}')
+    fi
+
+
+
+    prettyBox CURRENT "Try to find the installation section using version ID first 2"
+    # Try to find the installation section using version ID first
+    if [[ -z "$SECTION" ]]; then
+      SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"${search_key2}\".*?</a>.*?</pre>" | tr -d '\0')
+    fi
+
+    # If not found, try using the version codename
+    if [[ -z "$SECTION" ]]; then
+        prettyBox CURRENT "If not found, try using the version codename 2"
+        SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"${search_codename2}\".*?</a>.*?</pre>" | tr -d '\0')
+    fi
+
+
+    # Try to find the installation section using version ID first
+      prettyBox CURRENT "Try to find the installation section using awk and version ID first 2"
+    if [[ -z "$SECTION" ]]; then
+      SECTION=$(echo "$DATA" | awk -v pat="a name=\"$search_key2\"" '$0 ~ pat, /<\/pre>/{print}')
+    fi
+    # If not found, try using the version codename
+    if [[ -z "$SECTION" ]]; then
+        prettyBox CURRENT "If not found, try using the awk and version codename 2"
+        SECTION=$(echo "$DATA" | awk -v pat="a name=\"$search_codename2\"" '$0 ~ pat, /<\/pre>/{print}')
+    fi
+
+
+      if [[ -z "$SECTION" ]]; then
+        echo "No installation method found for ${search_key} or ${search_codename}."
+        echo "Printing the first 2000 characters of DATA for troubleshooting:"
+        echo "${DATA:0:2000}"
+        echo "$DATA"
+        exit 1
+      else
+        prettyBox CURRENT "Installation search for sudo command:"
+        echo "$SECTION" | grep 'sudo'  # Assuming all relevant commands are prefixed with 'sudo'
+        read -p "Install Tailscale with the commands? (y/N) " response
+      if [[ "$response" =~ ^[Yy]$ ]]; then
+        echo "Installerer Tailscale for $OS $VERSION_CODENAME...$os_id $version_id"
+        echo "$SECTION" | grep 'curl' | bash
+      else
+        echo "Install aborted."
+        exit 1
+      fi
+    fi
+}
+
+
+function Install_From_Tailscale_Script() {
+    local OS_ID=$(awk -F= '/^ID=/{print $2}' /etc/os-release | tr -d '"')
+    local VERSION_ID=$(awk -F= '/^VERSION_ID=/{print $2}' /etc/os-release | tr -d '"')
+    local VERSION_CODENAME=$(awk -F= '/^VERSION_CODENAME=/{print $2}' /etc/os-release | tr -d '"')
+
+    # Build search keys
+    local search_key="${OS_ID}-${VERSION_ID}"
+    local search_codename="${OS_ID}-${VERSION_CODENAME}"
+    local search_key2="${OS_ID} ${VERSION_ID}"
+    local search_codename2="${OS_ID} ${VERSION_CODENAME}"
+
+    fetchAndParseData "$URL" "$search_key" "$search_codename" "$search_key2" "$search_codename2"
+
 }
 
 
 prettyBox CURRENT "Checking if Tailscale is installed..."
+checkInstallStatus
+
+prettyBox CURRENT "Detect platform..."
+detectplatform
+
+prettyBox CURRENT "Check if it's installed"
 checkInstallStatus  # Do not pipe this to tee if it affects the exit behavior
+
+prettyBox CURRENT "Detect architrcture"
+detectarchitecture
 
 prettyBox CURRENT "Run showInstallSummary"
 showInstallSummary 2>&1 | tee -a $LOGFILE
@@ -449,8 +531,14 @@ case "$OS_type" in
     ;;
 esac
 
-prettyBox CURRENT "Login and connect to tailscale? (y/N)"
+
+if command -v ${APP_MAIN_NAME} >/dev/null; then
+  ALREADY_INSTALLED=true
+else
+  prettyBox CURRENT "Login and connect to tailscale? (y/N)"
   read -r response
     if [[ "$response" =~ ^[Yy]$ ]]; then
       tailscale up | tee -a $LOGFILE
     fi
+fi
+
