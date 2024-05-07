@@ -1,0 +1,34 @@
+
+------------------------------------------------
+| Install Summary
+------------------------------------------------
+| Target Operating System:       [32mlinux[0m
+| Target distribution:           [32mdebian[0m
+| Target distribution version:   [32mbookworm[0m
+| Target Arch:                   [32mamd64[0m
+| Section = OS and version:      __[0m
+| URL:                           https://pkgs.tailscale.com/stable/[0m
+------------------------------------------------
+------------------------------------------------
+| Install Summary
+------------------------------------------------
+| Target Operating System:       [32mdebian[0m
+| Distribution Name:             [32mDebian GNU/Linux 12 (bookworm)[0m
+| Distribution Version ID:       [32m12[0m
+| Distribution Version Codename: [32mbookworm[0m
+| Target Arch:                   [32mamd64[0m
+| URL:                           https://pkgs.tailscale.com/stable/[0m
+------------------------------------------------
+[ [33mCURRENT[0m  ] Fetch HTML data
+[ [33mCURRENT[0m  ] Try to find the installation section using version ID first
+[ [33mCURRENT[0m  ] If not found, try using the version codename
+[ [33mCURRENT[0m  ] Try to find the installation section using awk and version ID first
+[ [33mCURRENT[0m  ] Try to find the installation section using version ID first 2
+[ [33mCURRENT[0m  ] Try to find the installation section using awk and version ID first 2
+[ [33mCURRENT[0m  ] Installation search for sudo command:
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+sudo apt-get update && sudo apt-get install tailscale
+sudo tailscale up
+Install Tailscale with the commands? (y/N) Install aborted.
