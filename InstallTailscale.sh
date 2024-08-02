@@ -25,8 +25,8 @@ function checkInstallStatus () {
   if command -v ${APP_MAIN_NAME} >/dev/null; then
     ALREADY_INSTALLED=true
     prettyBox COMPLETE "Tailscale is already installed" | tee -a $LOGFILE
-    # Ask to remove the installed version of tailscale
-    echo "Do you want to remove the installed tailscale version? (y/N)"
+    # Ask to update the installed version of tailscale
+    echo "Do you want to update the installed tailscale version? (y/N)"
     read -r response
     if [[ "$response" =~ ^[Yy]$ ]]; then
       rm -f "/usr/sbin/${APP_MAIN_NAME}" | tee -a $LOGFILE

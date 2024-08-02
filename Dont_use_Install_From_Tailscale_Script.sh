@@ -18,28 +18,6 @@ red="\e[31m"
 clear='\e[0m'
 yellow='\e[33m'
 
-# function checkInstallStatus () {
-#   if command -v ${APP_MAIN_NAME} >/dev/null; then
-#     ALREADY_INSTALLED=true
-#     prettyBox COMPLETE "Tailscale is already installed" | tee -a $LOGFILE
-#     # Ask to remove the installed version of tailscale
-#     echo "Do you want to remove the installed tailscale version? (y/N)"
-#     read -r response
-#     if [[ "$response" =~ ^[Yy]$ ]]; then
-#       rm -f "/usr/sbin/${APP_MAIN_NAME}" | tee -a $LOGFILE
-#       rm -f "/usr/bin/${APP_MAIN_NAME_DEMON}" | tee -a $LOGFILE
-#       ALREADY_INSTALLED=false
-#       prettyBox COMPLETE "${APP_FILENAME} file removed." | tee -a $LOGFILE
-#     else
-#       prettyBox CURRENT "${APP_FILENAME} file is not removed."
-#       prettyBox CURRENT "Exiting with status 2"
-#       exit 2
-#     fi
-#   else
-#     echo -e "${green}Tailscale is not installed${clear}" | tee -a $LOGFILE
-#   fi
-# }
-
 function prettyBox () {
   case $1 in
     CURRENT) color=$yellow ;;
@@ -157,7 +135,6 @@ function main() {
 showInstallSummary
 
 main
-
 
 
 
