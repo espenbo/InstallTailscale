@@ -57,3 +57,41 @@ Known Issues
 
     The script must be run with sufficient permissions to install software, typically as root.
     The handling of non-systemd systems is less robust and may require manual intervention.
+
+# update_tailscale_certificates.sh
+
+`update_tailscale_certificates.sh` is a script that automates the process of updating Tailscale-issued certificates for a Tailscale-enabled device. It dynamically retrieves the correct DNS name for the device, requests a new certificate, combines the certificate and private key into a `.pem` file, and configures the `lighttpd` web server to use the updated certificate. Finally, it reloads the `lighttpd` server to apply the changes.
+
+---
+
+### Key Features
+
+#### 1. **Dynamic DNS Name Detection**
+- Retrieves the device's DNS name from Tailscale's JSON status output.
+- Strips any trailing periods to ensure compatibility with the `tailscale cert` command.
+
+#### 2. **Certificate Management**
+- Requests a new certificate using Tailscale's built-in `cert` command.
+- Combines the `.crt` and `.key` files into a `.pem` file for use by `lighttpd`.
+
+#### 3. **Web Server Integration**
+- Configures `lighttpd` to use the updated `.pem` file.
+- Reloads `lighttpd` to apply the new certificate without restarting the server.
+
+---
+
+### How to Set It Up
+
+#### 1. **Save the Script**
+Save the script to `/usr/local/bin/update_tailscale_certificates.sh`:
+```bash
+sudo nano /usr/local/bin/update_tailscale_certificates.sh
+```
+##### Add the following line to schedule the script to run At 05:00 on every 14th day-of-month:   https://crontab.guru/#0_5_*/14_*_*
+```bash
+    0 5 */14 * * /usr/local/bin/update_tailscale_certificates.sh >> /var/log/tailscale_cert_update.log 2>&1
+```
+##### Check Logs: Monitor the log file to ensure the script runs as expected:
+```bash
+    tail -f /var/log/tailscale_cert_update.log
+```
