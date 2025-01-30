@@ -44,6 +44,7 @@ TAILSCALE_DNSNAME=$(tailscale status --json | grep "\"DNSName\": \"$(hostname | 
 
 if [ -z "$TAILSCALE_DNSNAME" ]; then
     echo "Error: Unable to determine the Tailscale DNSName. Exiting."
+    logger -t update_tailscale_certificates "Error: Unable to determine the Tailscale DNSName."
     exit 1
 fi
 
@@ -52,9 +53,40 @@ CERTS_DIR="/var/lib/tailscale/certs"
 LIGHTTPD_CERT="/etc/lighttpd/https-cert.pem"
 PEM_FILE="$CERTS_DIR/$TAILSCALE_DNSNAME.pem"
 
+CERT_LINK_DIR="/etc/certificates"
+CERT_KEY_DIR="/etc/certificates/keys"
+
+# Ensure the directories exist
+mkdir -p "$CERT_LINK_DIR" "$CERT_KEY_DIR"
+
+# Check certificate expiration (if it exists)
+CERT_FILE="$CERTS_DIR/$TAILSCALE_DNSNAME.crt"
+if [ -f "$CERT_FILE" ]; then
+    EXPIRATION_DATE=$(openssl x509 -enddate -noout -in "$CERT_FILE" | cut -d= -f2)
+    EXPIRATION_EPOCH=$(date -d "$EXPIRATION_DATE" +%s)
+    CURRENT_EPOCH=$(date +%s)
+    DAYS_LEFT=$(( (EXPIRATION_EPOCH - CURRENT_EPOCH) / 86400 ))
+    
+    if [ "$DAYS_LEFT" -gt 7 ]; then
+        echo "Certificate is still valid for $DAYS_LEFT days, skipping renewal."
+        logger -t update_tailscale_certificates "Certificate is still valid for $DAYS_LEFT days, skipping renewal."
+    else
+        echo "Certificate expires soon ($DAYS_LEFT days left), renewing..."
+    fi
+else
+    echo "No existing certificate found, generating new one."
+fi
+
 # Update Tailscale certificate
 echo "Requesting new Tailscale certificate for $TAILSCALE_DNSNAME..."
 tailscale cert "$TAILSCALE_DNSNAME"
+
+# Verify that certificate and key files were created
+if [ ! -f "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" ] || [ ! -f "$CERTS_DIR/$TAILSCALE_DNSNAME.key" ]; then
+    echo "Error: Failed to generate Tailscale certificate."
+    logger -t update_tailscale_certificates "Error: Failed to generate certificate for $TAILSCALE_DNSNAME."
+    exit 1
+fi
 
 # Generate the combined PEM file
 echo "Combining certificate and key into PEM file..."
@@ -67,12 +99,30 @@ if [ ! -L "$LIGHTTPD_CERT" ]; then
 fi
 ln -sf "$PEM_FILE" "$LIGHTTPD_CERT"
 
+# Create symbolic links for other locations
+ln -sf "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt"
+ln -sf "$PEM_FILE" "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem"
+
+# Ensure symlinks are valid
+if [ ! -L "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt" ] || [ ! -L "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem" ]; then
+    echo "Error: Symlink creation failed."
+    logger -t update_tailscale_certificates "Error: Symlink creation failed."
+    exit 1
+fi
+
+echo "Symlinks created:"
+echo "  - $CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt"
+echo "  - $CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem"
+
 # Reload lighttpd to apply the changes
 echo "Reloading lighttpd server..."
-/etc/init.d/lighttpd reload
+if ! /etc/init.d/lighttpd reload; then
+    echo "Reload failed, restarting lighttpd..."
+    /etc/init.d/lighttpd restart
+fi
 
+logger -t update_tailscale_certificates "Successfully updated certificate for $TAILSCALE_DNSNAME."
 echo "Certificate update completed successfully!"
-
 
 
 
