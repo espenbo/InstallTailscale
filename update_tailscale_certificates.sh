@@ -36,15 +36,22 @@
 # tail -f /var/log/tailscale_cert_update.log
 
 
+#!/bin/bash
+
 # Exit on any error
 set -e
+
+# Define log file
+LOG_FILE="/var/log/tailscale_cert_update.log"
 
 # Get the DNSName for the current machine and remove the trailing dot
 TAILSCALE_DNSNAME=$(tailscale status --json | grep "\"DNSName\": \"$(hostname | tr '[:upper:]' '[:lower:]')." | awk -F'"' '{print $4}' | sed 's/\.$//')
 
+# Log the DNS name for debugging
+echo "Detected Tailscale DNS Name: $TAILSCALE_DNSNAME" | tee -a "$LOG_FILE"
+
 if [ -z "$TAILSCALE_DNSNAME" ]; then
-    echo "Error: Unable to determine the Tailscale DNSName. Exiting."
-    logger -t update_tailscale_certificates "Error: Unable to determine the Tailscale DNSName."
+    echo "Error: Unable to determine the Tailscale DNSName. Exiting." | tee -a "$LOG_FILE"
     exit 1
 fi
 
@@ -58,71 +65,76 @@ CERT_KEY_DIR="/etc/certificates/keys"
 
 # Ensure the directories exist
 mkdir -p "$CERT_LINK_DIR" "$CERT_KEY_DIR"
+chmod 755 "$CERT_LINK_DIR" "$CERT_KEY_DIR"
 
 # Check certificate expiration (if it exists)
 CERT_FILE="$CERTS_DIR/$TAILSCALE_DNSNAME.crt"
 if [ -f "$CERT_FILE" ]; then
-    EXPIRATION_DATE=$(openssl x509 -enddate -noout -in "$CERT_FILE" | cut -d= -f2)
-    EXPIRATION_EPOCH=$(date -d "$EXPIRATION_DATE" +%s)
-    CURRENT_EPOCH=$(date +%s)
-    DAYS_LEFT=$(( (EXPIRATION_EPOCH - CURRENT_EPOCH) / 86400 ))
+    EXPIRATION_SECONDS_LEFT=$(openssl x509 -checkend $((7 * 86400)) -noout -in "$CERT_FILE" && echo "valid" || echo "expired")
     
-    if [ "$DAYS_LEFT" -gt 7 ]; then
-        echo "Certificate is still valid for $DAYS_LEFT days, skipping renewal."
-        logger -t update_tailscale_certificates "Certificate is still valid for $DAYS_LEFT days, skipping renewal."
+    if [ "$EXPIRATION_SECONDS_LEFT" == "valid" ]; then
+        echo "Certificate is still valid for more than 7 days, skipping renewal." | tee -a "$LOG_FILE"
     else
-        echo "Certificate expires soon ($DAYS_LEFT days left), renewing..."
+        echo "Certificate expires soon or is expired, renewing..." | tee -a "$LOG_FILE"
+        tailscale cert "$TAILSCALE_DNSNAME"
     fi
 else
-    echo "No existing certificate found, generating new one."
+    echo "No existing certificate found, generating new one." | tee -a "$LOG_FILE"
+    tailscale cert "$TAILSCALE_DNSNAME"
 fi
 
-# Update Tailscale certificate
-echo "Requesting new Tailscale certificate for $TAILSCALE_DNSNAME..."
-tailscale cert "$TAILSCALE_DNSNAME"
-
-# Verify that certificate and key files were created
+# Verify that certificate and key files exist
 if [ ! -f "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" ] || [ ! -f "$CERTS_DIR/$TAILSCALE_DNSNAME.key" ]; then
-    echo "Error: Failed to generate Tailscale certificate."
-    logger -t update_tailscale_certificates "Error: Failed to generate certificate for $TAILSCALE_DNSNAME."
+    echo "Error: Required certificate files are missing." | tee -a "$LOG_FILE"
     exit 1
 fi
 
 # Generate the combined PEM file
-echo "Combining certificate and key into PEM file..."
-cat "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERTS_DIR/$TAILSCALE_DNSNAME.key" > "$PEM_FILE"
+if [ ! -f "$PEM_FILE" ]; then
+    echo "Creating PEM file..." | tee -a "$LOG_FILE"
+    cat "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERTS_DIR/$TAILSCALE_DNSNAME.key" > "$PEM_FILE"
+fi
+
+# Ensure the PEM file exists
+if [ ! -f "$PEM_FILE" ]; then
+    echo "Error: PEM file was not created." | tee -a "$LOG_FILE"
+    exit 1
+fi
 
 # Symlink the PEM file for lighttpd
 if [ ! -L "$LIGHTTPD_CERT" ]; then
-    echo "Creating symlink for lighttpd PEM file..."
+    echo "Creating symlink for lighttpd PEM file..." | tee -a "$LOG_FILE"
     mv "$LIGHTTPD_CERT" "${LIGHTTPD_CERT}.bak"  # Backup original certificate
 fi
 ln -sf "$PEM_FILE" "$LIGHTTPD_CERT"
 
-# Create symbolic links for other locations
-ln -sf "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt"
-ln -sf "$PEM_FILE" "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem"
+# Ensure symlinks exist, even if certificate wasn't renewed
+if [ ! -L "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt" ]; then
+    ln -sf "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt"
+    echo "Created symlink for CRT file." | tee -a "$LOG_FILE"
+fi
 
-# Ensure symlinks are valid
+if [ ! -L "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem" ]; then
+    ln -sf "$PEM_FILE" "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem"
+    echo "Created symlink for PEM file." | tee -a "$LOG_FILE"
+fi
+
+# Verify symlinks
 if [ ! -L "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt" ] || [ ! -L "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem" ]; then
-    echo "Error: Symlink creation failed."
-    logger -t update_tailscale_certificates "Error: Symlink creation failed."
+    echo "Error: Symlink verification failed." | tee -a "$LOG_FILE"
     exit 1
 fi
 
-echo "Symlinks created:"
-echo "  - $CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt"
-echo "  - $CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem"
+# Debugging: List created symlinks
+echo "Symlinks created and verified:" | tee -a "$LOG_FILE"
+ls -l "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt" | tee -a "$LOG_FILE"
+ls -l "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem" | tee -a "$LOG_FILE"
 
 # Reload lighttpd to apply the changes
-echo "Reloading lighttpd server..."
+echo "Reloading lighttpd server..." | tee -a "$LOG_FILE"
 if ! /etc/init.d/lighttpd reload; then
-    echo "Reload failed, restarting lighttpd..."
+    echo "Reload failed, restarting lighttpd..." | tee -a "$LOG_FILE"
     /etc/init.d/lighttpd restart
 fi
 
-logger -t update_tailscale_certificates "Successfully updated certificate for $TAILSCALE_DNSNAME."
-echo "Certificate update completed successfully!"
-
-
-
+echo "Certificate update completed successfully!" | tee -a "$LOG_FILE"
