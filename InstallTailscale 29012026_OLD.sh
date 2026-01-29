@@ -14,12 +14,8 @@ VERSION_ID="__"
 VERSION_CODENAME="Distro version"
 SECTION="__"
 DATA=""
-MIN_REQUIRED_SPACE_MB=40
-EXTRACTION_DIR=""
-TMP_ARCHIVE_PATH=""
-
-echo "" > "$LOGFILE"
-# Color variables
+echo "" > $LOGFILE
+# Color Variables
 green='\e[32m'
 red="\e[31m"
 clear='\e[0m'
@@ -28,22 +24,22 @@ yellow='\e[33m'
 function checkInstallStatus () {
   if command -v ${APP_MAIN_NAME} >/dev/null; then
     ALREADY_INSTALLED=true
-    prettyBox COMPLETE "Tailscale is already installed" | tee -a "$LOGFILE"
-    # Ask to update the installed version of Tailscale
+    prettyBox COMPLETE "Tailscale is already installed" | tee -a $LOGFILE
+    # Ask to update the installed version of tailscale
     echo "Do you want to update the installed tailscale version? (y/N)"
     read -r response
     if [[ "$response" =~ ^[Yy]$ ]]; then
-      rm -f "/usr/sbin/${APP_MAIN_NAME}" | tee -a "$LOGFILE"
-      rm -f "/usr/bin/${APP_MAIN_NAME_DEMON}" | tee -a "$LOGFILE"
+      rm -f "/usr/sbin/${APP_MAIN_NAME}" | tee -a $LOGFILE
+      rm -f "/usr/bin/${APP_MAIN_NAME_DEMON}" | tee -a $LOGFILE
       ALREADY_INSTALLED=false
-      prettyBox COMPLETE "${APP_FILENAME} file removed." | tee -a "$LOGFILE"
+      prettyBox COMPLETE "${APP_FILENAME} file removed." | tee -a $LOGFILE
     else
       prettyBox CURRENT "${APP_FILENAME} file is not removed."
       prettyBox CURRENT "Exiting with status 2"
       exit 2
     fi
   else
-    echo -e "${green}Tailscale is not installed${clear}" | tee -a "$LOGFILE"
+    echo -e "${green}Tailscale is not installed${clear}" | tee -a $LOGFILE
   fi
 }
 
@@ -57,7 +53,7 @@ function prettyBox () {
   echo -e "[ ${color}${1}${clear}  ] ${2}"
 }
 
-# Function to check if the system uses systemd
+# Funksjon for å sjekke om systemet bruker systemd
 uses_systemd() {
   [[ $(ps --no-headers -o comm 1) == "systemd" ]]
 }
@@ -66,74 +62,6 @@ function extractFilenameFromURL() {
     local url=$1
     local filename=$(basename "$url")
     echo "$filename"
-}
-
-# Find a mount point with enough free space for extraction
-function find_available_mountpoint() {
-  local min_space_kb=$((MIN_REQUIRED_SPACE_MB * 1024))
-  local best_point=""
-  local best_space_kb=0
-
-  while read -r line; do
-    local mount avail
-    mount=$(awk '{print $NF}' <<< "$line")
-    avail=$(awk '{print $(NF-2)}' <<< "$line")
-    if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail >= min_space_kb )) && (( avail > best_space_kb )); then
-      best_space_kb=$avail
-      best_point=$mount
-    fi
-  done < <(df -kP | tail -n +2)
-
-  [[ -z "$best_point" ]] && return 1
-  printf "%s\n" "$best_point"
-}
-
-# Prepare an alternate extraction directory if needed
-function prepare_extraction_target() {
-  local mountpoint
-  if ! mountpoint=$(find_available_mountpoint); then
-    prettyBox FAILED "No filesystem with enough space available"
-    return 1
-  fi
-
-  EXTRACTION_DIR="$mountpoint/tailscale_extract"
-  mkdir -p "$EXTRACTION_DIR"
-  if [[ ! -w "$EXTRACTION_DIR" ]]; then
-    prettyBox FAILED "Cannot write to $EXTRACTION_DIR"
-    return 1
-  fi
-}
-
-function prompt_restart_tailscaled() {
-  prettyBox CURRENT "Do you want to restart the tailscaled service now? (y/N)"
-  read -r response
-  if [[ "$response" =~ ^[Yy]$ ]]; then
-    if uses_systemd; then
-      systemctl restart tailscaled | tee -a "$LOGFILE"
-    else
-      if [[ -x "/etc/init.d/tailscale" ]]; then
-        /etc/init.d/tailscale stop | tee -a "$LOGFILE"
-        /etc/init.d/tailscale start | tee -a "$LOGFILE"
-      else
-        prettyBox FAILED "init.d script not found: /etc/init.d/tailscale"
-        echo "Manual restart required to load the new tailscaled binary."
-        echo "If you have a custom init script, restart it now."
-        echo "Then verify with: tailscale status"
-      fi
-    fi
-  else
-    prettyBox CURRENT "Manual restart required to load the new tailscaled binary."
-    if uses_systemd; then
-      echo "Run: systemctl restart tailscaled"
-      echo "If systemctl is unavailable, try: service tailscaled restart"
-      echo "Then verify with: tailscale status"
-    else
-      echo "Run: /etc/init.d/tailscale stop"
-      echo "Then: /etc/init.d/tailscale start"
-      echo "If supported, you can also run: /etc/init.d/tailscale restart"
-      echo "Then verify with: tailscale status"
-    fi
-  fi
 }
 
 function installNativePlaceBinarys() {
@@ -165,55 +93,26 @@ function installNativeExtractBinarys() {
   local APP_FILENAME=$1
   prettyBox CURRENT "Extracting ${APP_FILENAME}"
 
-  local extracted_dir
-  extracted_dir=$(basename "${APP_FILENAME}" .tgz)
-
-  # Decide where to extract the archive
-  local extraction_root="."
-  if prepare_extraction_target; then
-    extraction_root="$EXTRACTION_DIR"
-  else
-    prettyBox CURRENT "Falling back to current directory for extraction"
-  fi
-
   # Remove any old versions of the unpacked folder to avoid conflicts
-  rm -rf "${extraction_root}/${extracted_dir}" | tee -a "$LOGFILE"
+  local extracted_dir=$(basename "${APP_FILENAME}" .tgz)
+  rm -rf "./${extracted_dir}" | tee -a $LOGFILE
 
-  local archive_path="${APP_FILENAME}"
-  if [[ "$extraction_root" != "." ]]; then
-    TMP_ARCHIVE_PATH="$extraction_root/$APP_FILENAME"
-    if ! mv "$APP_FILENAME" "$TMP_ARCHIVE_PATH"; then
-      prettyBox FAILED "Failed to move archive to $TMP_ARCHIVE_PATH" 1
-      return 1
-    fi
-    archive_path="$TMP_ARCHIVE_PATH"
-  fi
-
-  if tar -xzf "$archive_path" -C "$extraction_root"; then
+  if tar -xzf "${APP_FILENAME}"; then
     prettyBox CURRENT "Extracted ${APP_FILENAME}"
     # Ask to remove the downloaded file
     echo "Do you want to remove the downloaded file ${APP_FILENAME}? (y/N)"
     read -r response
     if [[ "$response" =~ ^[Yy]$ ]]; then
-      rm -f "$archive_path" | tee -a "$LOGFILE"
+      rm -f "${APP_FILENAME}" | tee -a $LOGFILE
       prettyBox COMPLETE "${APP_FILENAME} file removed."
     else
       prettyBox COMPLETE "${APP_FILENAME} file is not removed."
     fi
 
     # Continue operations within the unpacked directory
-    if [[ "$extraction_root" == "." ]]; then
-      cd "${extracted_dir}"
-    else
-      cd "${extraction_root}/${extracted_dir}"
-    fi
+    cd "${extracted_dir}"
     installNativePlaceBinarys  # Assume this function handles files within the current directory correctly
-    cd - >/dev/null
-
-    # Clean up the temporary extraction directory if used
-    if [[ -n "$EXTRACTION_DIR" && "$extraction_root" != "." ]]; then
-      rm -rf "$EXTRACTION_DIR"
-    fi
+    cd ..
   else
     prettyBox FAILED "Failed to extract ${APP_FILENAME}" 1
   fi
@@ -225,22 +124,22 @@ function logicForinitd() {
 
     # Check if the script already exists to avoid overwriting
     if [[ -f "$init_script" ]]; then
-      prettyBox FAILED "$init_script already exists." | tee -a "$LOGFILE"
+      prettyBox FAILED "$init_script already exists." | tee -a $LOGFILE
 
       prettyBox CURRENT "Do you want to overwrite the $init_script file? (y/N)"
       read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
-          rm -f "$init_script" | tee -a "$LOGFILE"
+          rm -f "$init_script" | tee -a $LOGFILE
           prettyBox COMPLETE "$init_script file removed."
         else
           prettyBox COMPLETE "$init_script file is not removed."
           return
         fi
     fi
-
+    
     # Create init-script with necessary content
     prettyBox CURRENT "Creating ${init_script} init script."
-    cat > "$init_script" << '__INIT__'
+    cat > "$init_script" << 'EOF'
 #!/bin/sh
 # Tailscale init script
 
@@ -288,7 +187,7 @@ status)
     ;;
 esac
 
-__INIT__
+EOF
 
     # Set execution rights for the script
     prettyBox CURRENT "Set chown root:root and +x to the ${init_script} file."
@@ -309,13 +208,13 @@ __INIT__
     prettyBox CURRENT "Start tailscale service? (y/N)"
       read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
-          /etc/init.d/tailscale start | tee -a "$LOGFILE"
+          /etc/init.d/tailscale start | tee -a $LOGFILE
         fi
 }
 
 
 function detectplatform () {
-  # Detect the platform
+  # detect the platform
   OS1="$(uname | tr '[:upper:]' '[:lower:]')"
   if ! [[ $OS1 == "linux" || $OS1 == "darwin" ]]; then
     prettyBox FAILED "OS not supported"
@@ -398,6 +297,7 @@ function Install_binaries_for_armv6() {
     exit 1
   fi
 
+  #FULL_URL="https://pkgs.tailscale.com/stable/$LINK"
   FULL_URL="${URL}${LINK}"
   prettyBox CURRENT "Downloading $FULL_URL"
   APP_FILENAME=$(extractFilenameFromURL "$FULL_URL")
@@ -407,13 +307,13 @@ function Install_binaries_for_armv6() {
   else
     prettyBox CURRENT "Downloading with curl..."
     curl -o "$LINK" "$FULL_URL"
-    prettyBox CURRENT "Extract and install native binaries"
+    prettyBox CURRENT "Extract and install nativ binarys"
     installNativeExtractBinarys "$APP_FILENAME"
     prettyBox CURRENT "The system does not use systemd. Creating init.d script..."
     logicForinitd
   fi
 }
-
+  
 function Install_binaries_for_arm64() {
   prettyBox CURRENT "Install_binaries_for_armv64"
   prettyBox CURRENT "Fetching installation methods from Tailscale..."
@@ -504,7 +404,7 @@ function fetchAndParseData() {
     local url="$1"
     local search_key="$2"
     local search_codename="$3"
-
+    
     prettyBox CURRENT "Fetch HTML data"
     # Fetch HTML data
     DATA=$(curl --silent --insecure "$url")
@@ -519,7 +419,7 @@ function fetchAndParseData() {
         SECTION=$(echo "$DATA" | grep -Pzo "(?s)<a name=\"${search_codename}\".*?</a>.*?</pre>" | tr -d '\0')
     fi
 
-    # Try different ways to find the right command
+    # Trying diffrent ways to find the right command
 
 
     # Try to find the installation section using version ID first
@@ -571,7 +471,7 @@ function fetchAndParseData() {
         echo "$SECTION" | grep 'sudo'  # Assuming all relevant commands are prefixed with 'sudo'
         read -p "Install Tailscale with the commands? (y/N) " response
       if [[ "$response" =~ ^[Yy]$ ]]; then
-        echo "Installing Tailscale for $OS $VERSION_CODENAME...$os_id $version_id"
+        echo "Installerer Tailscale for $OS $VERSION_CODENAME...$os_id $version_id"
         echo "$SECTION" | grep 'curl' | bash
       else
         echo "Install aborted."
@@ -610,20 +510,20 @@ prettyBox CURRENT "Detect architrcture"
 detectarchitecture
 
 prettyBox CURRENT "Run showInstallSummary"
-showInstallSummary 2>&1 | tee -a "$LOGFILE"
+showInstallSummary 2>&1 | tee -a $LOGFILE
 
 case "$OS_type" in
   armv7l|armv6)
-    Install_binaries_for_armv6 2>&1 | tee -a "$LOGFILE"
+    Install_binaries_for_armv6 2>&1 | tee -a $LOGFILE
     ;;
   arm64)
-    Install_binaries_for_arm64 2>&1 | tee -a "$LOGFILE"
+    Install_binaries_for_arm64 2>&1 | tee -a $LOGFILE
     ;;
   386)
-    Install_binaries_for_386 2>&1 | tee -a "$LOGFILE"
+    Install_binaries_for_386 2>&1 | tee -a $LOGFILE
     ;;
   amd64)
-    Install_From_Tailscale_Script 2>&1 | tee -a "$LOGFILE"
+    Install_From_Tailscale_Script 2>&1 | tee -a $LOGFILE
     ;;
   *)
     prettyBox FAILED "CPU architecture ${OS_type} not supported"
@@ -638,8 +538,7 @@ else
   prettyBox CURRENT "Login and connect to tailscale? (y/N)"
   read -r response
     if [[ "$response" =~ ^[Yy]$ ]]; then
-      tailscale up | tee -a "$LOGFILE"
+      tailscale up | tee -a $LOGFILE
     fi
 fi
 
-prompt_restart_tailscaled
