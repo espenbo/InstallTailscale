@@ -1,4 +1,4 @@
-# Install Tailscale
+# Install Tailscale.
 Script for automatic find rigth tailscale package to install
 This script automates the installation of Tailscale, leveraging system architecture detection, and dynamic retrieval of the appropriate installation packages from Tailscale's official repository.
 Features
