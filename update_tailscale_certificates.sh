@@ -1,8 +1,7 @@
 #!/bin/bash
 
-
-# The script, update_tailscale_certificates.sh, automates the process of updating Tailscale-issued certificates for a Tailscale-enabled device. 
-# It dynamically retrieves the correct DNS name for the device, requests a new certificate, combines the certificate and private key into a .pem file, 
+# The script, update_tailscale_certificates.sh, automates the process of updating Tailscale-issued certificates for a Tailscale-enabled device.
+# It dynamically retrieves the correct DNS name for the device, requests a new certificate, combines the certificate and private key into a .pem file,
 # and configures the lighttpd web server to use the updated certificate. Finally, it reloads the lighttpd server to apply the changes.
 
 
@@ -16,6 +15,8 @@
 #    Certificate Management:
 #        Requests a new certificate using Tailscale's built-in cert command.
 #        Combines the .crt and .key files into a .pem file for use by lighttpd.
+#        Rebuilds the .pem file whenever the underlying .crt/.key are newer than it,
+#        not just when the .pem file is missing (fixes stale-PEM bug from earlier version).
 #
 #    Web Server Integration:
 #        Configures lighttpd to use the updated .pem file.
@@ -23,7 +24,7 @@
 
 # How to Set It Up
 # Save the Script: Save the script to /usr/local/bin/update_tailscale_certificates.sh:
-# 
+#
 # Make It Executable:
 # chmod +x /usr/local/bin/update_tailscale_certificates.sh
 # Test the Script: Run the script manually to verify it works as expected:
@@ -34,9 +35,6 @@
 #    0 5 */14 * * /usr/local/bin/update_tailscale_certificates.sh >> /var/log/tailscale_cert_update.log 2>&1
 # Check Logs: Monitor the log file to ensure the script runs as expected:
 # tail -f /var/log/tailscale_cert_update.log
-
-
-#!/bin/bash
 
 # Exit on any error
 set -e
@@ -71,7 +69,7 @@ chmod 755 "$CERT_LINK_DIR" "$CERT_KEY_DIR"
 CERT_FILE="$CERTS_DIR/$TAILSCALE_DNSNAME.crt"
 if [ -f "$CERT_FILE" ]; then
     EXPIRATION_SECONDS_LEFT=$(openssl x509 -checkend $((7 * 86400)) -noout -in "$CERT_FILE" && echo "valid" || echo "expired")
-    
+
     if [ "$EXPIRATION_SECONDS_LEFT" == "valid" ]; then
         echo "Certificate is still valid for more than 7 days, skipping renewal." | tee -a "$LOG_FILE"
     else
@@ -89,10 +87,17 @@ if [ ! -f "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" ] || [ ! -f "$CERTS_DIR/$TAILSCALE
     exit 1
 fi
 
-# Generate the combined PEM file
-if [ ! -f "$PEM_FILE" ]; then
-    echo "Creating PEM file..." | tee -a "$LOG_FILE"
+# Generate/refresh the combined PEM file.
+# FIX: previously this only ran "if [ ! -f "$PEM_FILE" ]", so a renewed .crt/.key
+# (tailscale cert overwrites these in place) never got re-combined into the PEM
+# once it existed once -- lighttpd would keep serving a stale, eventually-expired
+# certificate. Now we rebuild whenever the source .crt or .key is newer than the
+# PEM (or the PEM is missing).
+if [ ! -f "$PEM_FILE" ] || [ "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" -nt "$PEM_FILE" ] || [ "$CERTS_DIR/$TAILSCALE_DNSNAME.key" -nt "$PEM_FILE" ]; then
+    echo "Creating/updating PEM file..." | tee -a "$LOG_FILE"
     cat "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERTS_DIR/$TAILSCALE_DNSNAME.key" > "$PEM_FILE"
+else
+    echo "PEM file already up to date, skipping rebuild." | tee -a "$LOG_FILE"
 fi
 
 # Ensure the PEM file exists
