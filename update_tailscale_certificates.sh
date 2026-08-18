@@ -55,7 +55,12 @@ fi
 
 # Directories for certificates
 CERTS_DIR="/var/lib/tailscale/certs"
-LIGHTTPD_CERT="/etc/lighttpd/https-cert.pem"
+# NOTE: /etc/lighttpd/https-cert.pem is NOT the right target - WAGO's own
+# /etc/init.d/lighttpd unconditionally re-symlinks it to custom-cert.pem (if
+# present) or default-cert.pem on every start/reload, clobbering anything we
+# put there directly. custom-cert.pem is WAGO's actual "bring your own cert"
+# hook; pointing it there survives lighttpd restarts.
+LIGHTTPD_CERT="/etc/lighttpd/custom-cert.pem"
 PEM_FILE="$CERTS_DIR/$TAILSCALE_DNSNAME.pem"
 
 CERT_LINK_DIR="/etc/certificates"
@@ -68,7 +73,12 @@ chmod 755 "$CERT_LINK_DIR" "$CERT_KEY_DIR"
 # Check certificate expiration (if it exists)
 CERT_FILE="$CERTS_DIR/$TAILSCALE_DNSNAME.crt"
 if [ -f "$CERT_FILE" ]; then
-    EXPIRATION_SECONDS_LEFT=$(openssl x509 -checkend $((7 * 86400)) -noout -in "$CERT_FILE" && echo "valid" || echo "expired")
+    # NOTE: "openssl ... -checkend" prints its own "Certificate will/will not
+    # expire" line to stdout even with -noout (that flag only suppresses the
+    # cert dump) - without redirecting it, that text ends up captured into
+    # EXPIRATION_SECONDS_LEFT alongside our own echo, so it never equals
+    # exactly "valid" and renewal fires on every run regardless of expiry.
+    EXPIRATION_SECONDS_LEFT=$(openssl x509 -checkend $((7 * 86400)) -noout -in "$CERT_FILE" >/dev/null 2>&1 && echo "valid" || echo "expired")
 
     if [ "$EXPIRATION_SECONDS_LEFT" == "valid" ]; then
         echo "Certificate is still valid for more than 7 days, skipping renewal." | tee -a "$LOG_FILE"
@@ -93,9 +103,11 @@ fi
 # once it existed once -- lighttpd would keep serving a stale, eventually-expired
 # certificate. Now we rebuild whenever the source .crt or .key is newer than the
 # PEM (or the PEM is missing).
+CERT_CHANGED=false
 if [ ! -f "$PEM_FILE" ] || [ "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" -nt "$PEM_FILE" ] || [ "$CERTS_DIR/$TAILSCALE_DNSNAME.key" -nt "$PEM_FILE" ]; then
     echo "Creating/updating PEM file..." | tee -a "$LOG_FILE"
     cat "$CERTS_DIR/$TAILSCALE_DNSNAME.crt" "$CERTS_DIR/$TAILSCALE_DNSNAME.key" > "$PEM_FILE"
+    CERT_CHANGED=true
 else
     echo "PEM file already up to date, skipping rebuild." | tee -a "$LOG_FILE"
 fi
@@ -107,11 +119,26 @@ if [ ! -f "$PEM_FILE" ]; then
 fi
 
 # Symlink the PEM file for lighttpd
-if [ ! -L "$LIGHTTPD_CERT" ]; then
-    echo "Creating symlink for lighttpd PEM file..." | tee -a "$LOG_FILE"
-    mv "$LIGHTTPD_CERT" "${LIGHTTPD_CERT}.bak"  # Backup original certificate
+# NOTE: only back up if something is actually there - custom-cert.pem won't
+# exist on a device that has never had a custom cert installed before, and
+# "mv" on a nonexistent source would abort the whole script under "set -e".
+if [ -e "$LIGHTTPD_CERT" ] && [ ! -L "$LIGHTTPD_CERT" ]; then
+    echo "Backing up existing lighttpd cert file..." | tee -a "$LOG_FILE"
+    mv "$LIGHTTPD_CERT" "${LIGHTTPD_CERT}.bak"
+fi
+# Track whether the symlink target is actually changing, so a first-ever
+# setup or a repaired/missing symlink also triggers the reload below - not
+# just a rebuilt PEM. Uses "if" rather than bare "test && ..." throughout:
+# a standalone "cmd1 && cmd2" aborts the script under "set -e" whenever
+# cmd1's test is false, since only if/while conditions are exempt from that.
+PREV_LIGHTTPD_LINK=""
+if [ -L "$LIGHTTPD_CERT" ]; then
+    PREV_LIGHTTPD_LINK="$(readlink "$LIGHTTPD_CERT")"
 fi
 ln -sf "$PEM_FILE" "$LIGHTTPD_CERT"
+if [ "$PREV_LIGHTTPD_LINK" != "$PEM_FILE" ]; then
+    CERT_CHANGED=true
+fi
 
 # Ensure symlinks exist, even if certificate wasn't renewed
 if [ ! -L "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt" ]; then
@@ -135,11 +162,17 @@ echo "Symlinks created and verified:" | tee -a "$LOG_FILE"
 ls -l "$CERT_LINK_DIR/$TAILSCALE_DNSNAME.crt" | tee -a "$LOG_FILE"
 ls -l "$CERT_KEY_DIR/$TAILSCALE_DNSNAME.pem" | tee -a "$LOG_FILE"
 
-# Reload lighttpd to apply the changes
-echo "Reloading lighttpd server..." | tee -a "$LOG_FILE"
-if ! /etc/init.d/lighttpd reload; then
-    echo "Reload failed, restarting lighttpd..." | tee -a "$LOG_FILE"
-    /etc/init.d/lighttpd restart
+# Reload lighttpd only if the certificate content or the custom-cert.pem
+# symlink target actually changed this run - a no-op run (the common case on
+# a 14-day cron cycle) shouldn't restart the web server for nothing.
+if [ "$CERT_CHANGED" = true ]; then
+    echo "Reloading lighttpd server..." | tee -a "$LOG_FILE"
+    if ! /etc/init.d/lighttpd reload; then
+        echo "Reload failed, restarting lighttpd..." | tee -a "$LOG_FILE"
+        /etc/init.d/lighttpd restart
+    fi
+else
+    echo "Certificate unchanged, skipping lighttpd reload." | tee -a "$LOG_FILE"
 fi
 
 echo "Certificate update completed successfully!" | tee -a "$LOG_FILE"
